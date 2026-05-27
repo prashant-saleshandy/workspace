@@ -1,0 +1,92 @@
+#!/bin/bash
+
+set -e
+
+AUTO_Y=false
+
+# check for --y flag
+if [[ "$1" == "--y" ]]; then
+  AUTO_Y=true
+fi
+
+# -----------------------------
+# STEP 1: Check if .git exists
+# -----------------------------
+if [ ! -d ".git" ]; then
+  echo "❌ Please initialize git first (git init)"
+  exit 1
+fi
+
+# -----------------------------
+# STEP 2: Check remote
+# -----------------------------
+REMOTE_EXISTS=$(git remote)
+
+if [ ! -z "$REMOTE_EXISTS" ]; then
+  if [ "$AUTO_Y" = false ]; then
+    read -p "⚠️ Remote already exists. Continue? (y/N): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+      echo "Aborted."
+      exit 1
+    fi
+  fi
+fi
+
+# -----------------------------
+# STEP 3: Get project name
+# -----------------------------
+DEFAULT_NAME=$(basename "$(pwd)")
+
+if [ "$AUTO_Y" = true ]; then
+  REPO_NAME=$DEFAULT_NAME
+else
+  read -p "Repo name ($DEFAULT_NAME): " input_name
+  REPO_NAME=${input_name:-$DEFAULT_NAME}
+fi
+
+# -----------------------------
+# STEP 4: Visibility
+# -----------------------------
+if [ "$AUTO_Y" = true ]; then
+  VISIBILITY="private"
+else
+  echo "Visibility:"
+  echo "1) Private (default)"
+  echo "2) Public"
+  read -p "Choose (1/2): " vis
+
+  if [ "$vis" == "2" ]; then
+    VISIBILITY="public"
+  else
+    VISIBILITY="private"
+  fi
+fi
+
+# -----------------------------
+# STEP 5: Check GitHub CLI
+# -----------------------------
+if ! command -v gh &> /dev/null; then
+  echo "❌ GitHub CLI (gh) not installed."
+  echo "Install: https://cli.github.com/"
+  exit 1
+fi
+
+# -----------------------------
+# STEP 6: Create repo (with retry if exists)
+# -----------------------------
+FINAL_NAME=$REPO_NAME
+
+while true; do
+  echo "Creating repo: $FINAL_NAME ($VISIBILITY)"
+
+  if gh repo create "$FINAL_NAME" --"$VISIBILITY" 2>/dev/null; then
+    git remote add origin "git@github.com:$(gh api user --jq .login)/$FINAL_NAME.git"
+    echo "Repo created and remote linked!"
+    break
+  else
+    echo "⚠️ Repo name exists. Trying new name..."
+    FINAL_NAME="${FINAL_NAME}-new"
+  fi
+done
+
+echo "Done!"

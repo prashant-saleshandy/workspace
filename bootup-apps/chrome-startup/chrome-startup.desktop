@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Chrome Startup Tabs
+Exec=/bin/bash /home/prashantsingh/prashant-workspace/core/workspace/bootup-apps/chrome-startup/launch-chrome.sh
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+Comment=Launch Chrome with configured tabs on login

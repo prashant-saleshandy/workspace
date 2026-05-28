@@ -1,0 +1,562 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/keyboard-bindings.config.json"
+BACKUP_FILE="$SCRIPT_DIR/keyboard-bindings.backup.json"
+
+MEDIA_SCHEMA="org.gnome.settings-daemon.plugins.media-keys"
+CUSTOM_SCHEMA="org.gnome.settings-daemon.plugins.media-keys.custom-keybinding"
+CUSTOM_BASE="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings"
+
+usage() {
+  cat <<'EOF'
+kbm - keyboard binding manager
+
+Usage:
+  kbm sync              Import/apply custom GNOME shortcuts without deleting extras
+  kbm sync -d           Sync and delete GNOME custom shortcuts missing from config
+  kbm sync --delete     Same as kbm sync -d
+  kbm validate          Validate config and report conflicts without applying changes
+  kbm list              List current GNOME custom shortcuts
+  kbm help              Show this help
+
+Config:
+  power_scripts/kbm/keyboard-bindings.config.json
+EOF
+}
+
+die() {
+  echo "Error: $*" >&2
+  exit 1
+}
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "$1 is required"
+}
+
+ensure_deps() {
+  need_cmd gsettings
+  need_cmd jq
+}
+
+ensure_config() {
+  if [ ! -f "$CONFIG_FILE" ]; then
+    cat >"$CONFIG_FILE" <<'EOF'
+{
+  "custom-shortcuts": {}
+}
+EOF
+  fi
+}
+
+raw_gvariant_string() {
+  local value="$1"
+  value="${value#\'}"
+  value="${value%\'}"
+  value="${value#\"}"
+  value="${value%\"}"
+  printf '%s' "$value"
+}
+
+quote_gvariant_string() {
+  jq -Rn --arg value "$1" '$value'
+}
+
+slugify() {
+  local value="$1"
+  value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  value="$(printf '%s' "$value" | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-+/-/g')"
+  [ -n "$value" ] || value="shortcut"
+  printf '%s' "$value"
+}
+
+title_from_id() {
+  local id="$1"
+  local word
+  local title=""
+  IFS='-' read -ra parts <<< "$id"
+  for word in "${parts[@]}"; do
+    if [[ "$word" =~ ^[a-z]?[0-9]+$ ]]; then
+      title+="${word^^} "
+    else
+      title+="${word^} "
+    fi
+  done
+  printf '%s' "${title% }"
+}
+
+key_to_human_and_gnome() {
+  local token="${1,,}"
+  HUMAN_KEY=""
+  GNOME_KEY=""
+
+  if [[ "$token" =~ ^[a-z]$ ]]; then
+    HUMAN_KEY="${token^^}"
+    GNOME_KEY="$token"
+    return 0
+  fi
+
+  if [[ "$token" =~ ^[0-9]$ ]]; then
+    HUMAN_KEY="$token"
+    GNOME_KEY="$token"
+    return 0
+  fi
+
+  if [[ "$token" =~ ^f([1-9]|1[0-2])$ ]]; then
+    HUMAN_KEY="${token^^}"
+    GNOME_KEY="${token^^}"
+    return 0
+  fi
+
+  case "$token" in
+    delete|del) HUMAN_KEY="Delete"; GNOME_KEY="Delete" ;;
+    backspace) HUMAN_KEY="BackSpace"; GNOME_KEY="BackSpace" ;;
+    tab) HUMAN_KEY="Tab"; GNOME_KEY="Tab" ;;
+    return|enter) HUMAN_KEY="Return"; GNOME_KEY="Return" ;;
+    escape|esc) HUMAN_KEY="Escape"; GNOME_KEY="Escape" ;;
+    space) HUMAN_KEY="Space"; GNOME_KEY="space" ;;
+    home) HUMAN_KEY="Home"; GNOME_KEY="Home" ;;
+    end) HUMAN_KEY="End"; GNOME_KEY="End" ;;
+    pageup|page-up|page_up) HUMAN_KEY="PageUp"; GNOME_KEY="Page_Up" ;;
+    pagedown|page-down|page_down) HUMAN_KEY="PageDown"; GNOME_KEY="Page_Down" ;;
+    up) HUMAN_KEY="Up"; GNOME_KEY="Up" ;;
+    down) HUMAN_KEY="Down"; GNOME_KEY="Down" ;;
+    left) HUMAN_KEY="Left"; GNOME_KEY="Left" ;;
+    right) HUMAN_KEY="Right"; GNOME_KEY="Right" ;;
+    *) return 1 ;;
+  esac
+}
+
+normalize_binding() {
+  local input="$1"
+  local compact token lower key_seen=false
+  local ctrl=false alt=false shift=false super=false
+
+  NORMALIZED_HUMAN=""
+  NORMALIZED_GNOME=""
+
+  compact="$(printf '%s' "$input" | sed -E 's/[[:space:]]+//g')"
+  [[ -n "$compact" ]] || return 1
+  [[ "$compact" != *"_"* && "$compact" != *"-"* ]] || return 1
+  [[ "$compact" != *"++"* && "$compact" != "+" && "$compact" != +* && "$compact" != *+ ]] || return 1
+
+  IFS='+' read -ra tokens <<< "$compact"
+  for token in "${tokens[@]}"; do
+    [[ -n "$token" ]] || return 1
+    lower="${token,,}"
+    case "$lower" in
+      ctrl|control|primary)
+        [ "$ctrl" = false ] || return 1
+        ctrl=true
+        ;;
+      alt)
+        [ "$alt" = false ] || return 1
+        alt=true
+        ;;
+      shift)
+        [ "$shift" = false ] || return 1
+        shift=true
+        ;;
+      super|meta|win|windows)
+        [ "$super" = false ] || return 1
+        super=true
+        ;;
+      *)
+        [ "$key_seen" = false ] || return 1
+        key_to_human_and_gnome "$token" || return 1
+        key_seen=true
+        ;;
+    esac
+  done
+
+  [ "$key_seen" = true ] || return 1
+
+  local human_parts=()
+  local gnome=""
+  [ "$ctrl" = true ] && human_parts+=("Ctrl") && gnome+="<Primary>"
+  [ "$alt" = true ] && human_parts+=("Alt") && gnome+="<Alt>"
+  [ "$shift" = true ] && human_parts+=("Shift") && gnome+="<Shift>"
+  [ "$super" = true ] && human_parts+=("Super") && gnome+="<Super>"
+  human_parts+=("$HUMAN_KEY")
+  gnome+="$GNOME_KEY"
+
+  NORMALIZED_HUMAN="$(IFS=+; printf '%s' "${human_parts[*]}")"
+  NORMALIZED_GNOME="$gnome"
+}
+
+canonicalize_gnome_binding() {
+  local input="$1"
+  local rest="$input"
+  local ctrl=false alt=false shift=false super=false mod key
+
+  while [[ "$rest" =~ ^\<([^>]*)\>(.*)$ ]]; do
+    mod="${BASH_REMATCH[1],,}"
+    rest="${BASH_REMATCH[2]}"
+    case "$mod" in
+      primary|ctrl|control) ctrl=true ;;
+      alt) alt=true ;;
+      shift) shift=true ;;
+      super|meta) super=true ;;
+    esac
+  done
+
+  key="$rest"
+  [ -n "$key" ] || return 1
+  key_to_human_and_gnome "$key" || return 1
+
+  local human_parts=()
+  [ "$ctrl" = true ] && human_parts+=("Ctrl")
+  [ "$alt" = true ] && human_parts+=("Alt")
+  [ "$shift" = true ] && human_parts+=("Shift")
+  [ "$super" = true ] && human_parts+=("Super")
+  human_parts+=("$HUMAN_KEY")
+  CANONICAL_GNOME_HUMAN="$(IFS=+; printf '%s' "${human_parts[*]}")"
+}
+
+custom_paths() {
+  gsettings get "$MEDIA_SCHEMA" custom-keybindings \
+    | grep -o "$CUSTOM_BASE/custom[0-9]*/" || true
+}
+
+load_gnome_json() {
+  local tmp
+  tmp="$(mktemp)"
+  printf '{"custom-shortcuts":{}}\n' >"$tmp"
+
+  local path name command binding id base_id suffix
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    name="$(raw_gvariant_string "$(gsettings get "$CUSTOM_SCHEMA:$path" name)")"
+    command="$(raw_gvariant_string "$(gsettings get "$CUSTOM_SCHEMA:$path" command)")"
+    binding="$(raw_gvariant_string "$(gsettings get "$CUSTOM_SCHEMA:$path" binding)")"
+    canonicalize_gnome_binding "$binding" || CANONICAL_GNOME_HUMAN="$binding"
+    base_id="$(slugify "$name")"
+    id="$base_id"
+    suffix=2
+    while jq -e --arg id "$id" '.["custom-shortcuts"] | has($id)' "$tmp" >/dev/null; do
+      id="${base_id}-${suffix}"
+      suffix=$((suffix + 1))
+    done
+    jq --arg id "$id" \
+      --arg name "$name" \
+      --arg command "$command" \
+      --arg binding "$CANONICAL_GNOME_HUMAN" \
+      --arg gnome_binding "$binding" \
+      --arg path "$path" \
+      '.["custom-shortcuts"][$id] = {
+        "name": $name,
+        "binding": $binding,
+        "command": $command,
+        "_gnome_binding": $gnome_binding,
+        "_path": $path
+      }' "$tmp" >"$tmp.next"
+    mv "$tmp.next" "$tmp"
+  done < <(custom_paths)
+
+  cat "$tmp"
+  rm -f "$tmp"
+}
+
+validate_config_shape() {
+  jq -e 'type == "object" and (.["custom-shortcuts"] | type == "object")' "$1" >/dev/null \
+    || die "$1 must contain an object field named custom-shortcuts"
+}
+
+config_count() {
+  jq '.["custom-shortcuts"] | length' "$1"
+}
+
+normalize_config_file() {
+  local file="$1"
+  local entries entry id binding command
+  mapfile -t entries < <(jq -r '.["custom-shortcuts"] | to_entries[] | @base64' "$file")
+
+  for entry in "${entries[@]}"; do
+    id="$(printf '%s' "$entry" | base64 -d | jq -r '.key')"
+    binding="$(printf '%s' "$entry" | base64 -d | jq -r '.value.binding // empty')"
+    command="$(printf '%s' "$entry" | base64 -d | jq -r '.value.command // empty')"
+
+    [[ "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "Shortcut id '$id' must use lowercase letters, numbers, and dashes"
+    [ -n "$binding" ] || die "Shortcut '$id' is missing binding"
+    [ -n "$command" ] || die "Shortcut '$id' is missing command"
+
+    if ! normalize_binding "$binding"; then
+      die "Shortcut '$id' has invalid binding '$binding'. Use bindings like Ctrl+Shift+K, Alt+Super+T, or Ctrl+Alt+Delete."
+    fi
+
+    jq --arg id "$id" --arg binding "$NORMALIZED_HUMAN" \
+      '.["custom-shortcuts"][$id].binding = $binding' "$file" >"$file.next"
+    mv "$file.next" "$file"
+  done
+}
+
+binding_conflicts_in_config() {
+  local file="$1"
+  jq -r '
+    .["custom-shortcuts"]
+    | to_entries
+    | group_by(.value.binding)
+    | map(select(length > 1))
+    | .[]
+    | "Conflict: " + .[0].value.binding + " is used by config shortcuts: " + (map(.key) | join(", "))
+  ' "$file"
+}
+
+builtin_conflicts() {
+  local file="$1"
+  local entries line value human id binding conflicts=0
+  mapfile -t entries < <(jq -r '.["custom-shortcuts"] | to_entries[] | [.key, .value.binding] | @tsv' "$file")
+
+  while IFS= read -r line; do
+    [[ "$line" == *" custom-keybindings "* ]] && continue
+    while IFS= read -r value; do
+      [ -n "$value" ] || continue
+      canonicalize_gnome_binding "$value" || continue
+      human="$CANONICAL_GNOME_HUMAN"
+      for entry in "${entries[@]}"; do
+        id="${entry%%$'\t'*}"
+        binding="${entry#*$'\t'}"
+        if [ "$binding" = "$human" ]; then
+          echo "Conflict: $binding is already used by GNOME built-in shortcut '${line%% *}' for config shortcut '$id'"
+          conflicts=1
+        fi
+      done
+    done < <(printf '%s\n' "$line" | grep -o "'[^']*'" | tr -d "'" | grep -v '^$' || true)
+  done < <(gsettings list-recursively "$MEDIA_SCHEMA")
+
+  return "$conflicts"
+}
+
+custom_conflicts() {
+  local config="$1"
+  local gnome_json="$2"
+  local entries id binding command gid gbinding gcommand conflicts=0
+  mapfile -t entries < <(jq -r '.["custom-shortcuts"] | to_entries[] | [.key, .value.binding, .value.command] | @tsv' "$config")
+
+  for entry in "${entries[@]}"; do
+    id="$(cut -f1 <<< "$entry")"
+    binding="$(cut -f2 <<< "$entry")"
+    command="$(cut -f3- <<< "$entry")"
+    while IFS=$'\t' read -r gid gbinding gcommand; do
+      [ -n "$gid" ] || continue
+      if [ "$gid" != "$id" ] && [ "$gbinding" = "$binding" ]; then
+        echo "Conflict: $binding is used by config shortcut '$id' and GNOME custom shortcut '$gid'"
+        conflicts=1
+      fi
+      if [ "$gid" != "$id" ] && [ "$gcommand" = "$command" ]; then
+        echo "Conflict: command '$command' is used by config shortcut '$id' and GNOME custom shortcut '$gid'"
+        conflicts=1
+      fi
+    done < <(jq -r '.["custom-shortcuts"] | to_entries[] | [.key, .value.binding, .value.command] | @tsv' "$gnome_json")
+  done
+
+  return "$conflicts"
+}
+
+validate_all() {
+  local config="$1"
+  local gnome_json="$2"
+  local delete_unmanaged="${3:-false}"
+  local conflicts
+
+  validate_config_shape "$config"
+  normalize_config_file "$config"
+
+  conflicts="$(binding_conflicts_in_config "$config")"
+  if [ -n "$conflicts" ]; then
+    echo "$conflicts"
+    return 1
+  fi
+
+  builtin_conflicts "$config" || return 1
+  if [ "$delete_unmanaged" = false ]; then
+    custom_conflicts "$config" "$gnome_json" || return 1
+  fi
+}
+
+import_gnome_shortcuts() {
+  local config="$1"
+  local gnome_json="$2"
+  local entries id binding command
+  mapfile -t entries < <(jq -r '.["custom-shortcuts"] | to_entries[] | [.key, .value.binding, .value.command] | @tsv' "$gnome_json")
+
+  for entry in "${entries[@]}"; do
+    id="$(cut -f1 <<< "$entry")"
+    binding="$(cut -f2 <<< "$entry")"
+    command="$(cut -f3- <<< "$entry")"
+    jq --arg id "$id" --arg binding "$binding" --arg command "$command" \
+      '.["custom-shortcuts"][$id] = {"binding": $binding, "command": $command}' "$config" >"$config.next"
+    mv "$config.next" "$config"
+  done
+}
+
+gnome_shortcut_count() {
+  local gnome_json="$1"
+  jq '.["custom-shortcuts"] | length' "$gnome_json"
+}
+
+warn_unmanaged() {
+  local config="$1"
+  local gnome_json="$2"
+  jq -r --slurpfile config "$config" '
+    .["custom-shortcuts"]
+    | to_entries[]
+    | . as $entry
+    | select(($config[0]["custom-shortcuts"] | has($entry.key)) | not)
+    | "Warning: shortcut \"" + $entry.key + "\" exists in GNOME but not config. Use kbm sync -d to delete unmanaged shortcuts."
+  ' "$gnome_json"
+}
+
+write_backup() {
+  load_gnome_json \
+    | jq '."custom-shortcuts" |= with_entries(.value |= {binding, command})' \
+    >"$BACKUP_FILE"
+}
+
+next_custom_path() {
+  local used="$1"
+  local i=0 path
+  while true; do
+    path="$CUSTOM_BASE/custom$i/"
+    if ! grep -Fxq "$path" <<< "$used"; then
+      printf '%s' "$path"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+}
+
+apply_config_to_gnome() {
+  local config="$1"
+  local gnome_json="$2"
+  local delete_unmanaged="$3"
+  local final_paths=()
+  local used_paths=""
+  local entries entry id binding command gnome_binding path name existing_paths final_array
+
+  existing_paths="$(jq -r '.["custom-shortcuts"] | to_entries[] | .value._path' "$gnome_json" 2>/dev/null || true)"
+  used_paths="$existing_paths"
+  mapfile -t entries < <(jq -r '.["custom-shortcuts"] | to_entries[] | @base64' "$config")
+
+  write_backup
+
+  for entry in "${entries[@]}"; do
+    id="$(printf '%s' "$entry" | base64 -d | jq -r '.key')"
+    binding="$(printf '%s' "$entry" | base64 -d | jq -r '.value.binding')"
+    command="$(printf '%s' "$entry" | base64 -d | jq -r '.value.command')"
+    normalize_binding "$binding" || die "Invalid binding after validation for '$id'"
+    gnome_binding="$NORMALIZED_GNOME"
+    path="$(jq -r --arg id "$id" '.["custom-shortcuts"][$id]._path // empty' "$gnome_json")"
+    if [ -z "$path" ]; then
+      path="$(next_custom_path "$used_paths")"
+      used_paths+=$'\n'"$path"
+    fi
+    final_paths+=("$path")
+    name="$(title_from_id "$id")"
+    gsettings set "$CUSTOM_SCHEMA:$path" name "$(quote_gvariant_string "$name")"
+    gsettings set "$CUSTOM_SCHEMA:$path" command "$(quote_gvariant_string "$command")"
+    gsettings set "$CUSTOM_SCHEMA:$path" binding "$(quote_gvariant_string "$gnome_binding")"
+  done
+
+  if [ "$delete_unmanaged" = false ]; then
+    while IFS= read -r path; do
+      [ -n "$path" ] || continue
+      if [[ ! " ${final_paths[*]} " =~ " $path " ]]; then
+        final_paths+=("$path")
+      fi
+    done <<< "$existing_paths"
+  fi
+
+  final_array="$(printf '%s\n' "${final_paths[@]}" | jq -R 'select(length > 0)' | jq -s '.')"
+  gsettings set "$MEDIA_SCHEMA" custom-keybindings "$final_array"
+
+  if [ "$delete_unmanaged" = true ]; then
+    jq -r --slurpfile config "$config" '
+      .["custom-shortcuts"]
+      | to_entries[]
+      | . as $entry
+      | select(($config[0]["custom-shortcuts"] | has($entry.key)) | not)
+      | "Deleted unmanaged GNOME shortcut: " + $entry.key
+    ' "$gnome_json"
+  fi
+}
+
+cmd_list() {
+  load_gnome_json | jq -r '
+    if (.["custom-shortcuts"] | length) == 0 then
+      "No GNOME custom shortcuts found."
+    else
+      .["custom-shortcuts"]
+      | to_entries[]
+      | .key + ": " + .value.binding + " -> " + .value.command
+    end
+  '
+}
+
+cmd_validate() {
+  ensure_config
+  local work gnome_json
+  work="$(mktemp)"
+  gnome_json="$(mktemp)"
+  cp "$CONFIG_FILE" "$work"
+  load_gnome_json >"$gnome_json"
+  validate_all "$work" "$gnome_json" false
+  echo "Config is valid."
+  rm -f "$work" "$gnome_json"
+}
+
+cmd_sync() {
+  local delete_unmanaged="$1"
+  ensure_config
+
+  local work gnome_json first_run=false
+  work="$(mktemp)"
+  gnome_json="$(mktemp)"
+  cp "$CONFIG_FILE" "$work"
+  load_gnome_json >"$gnome_json"
+
+  validate_config_shape "$work"
+  if [ "$(config_count "$work")" -eq 0 ] && [ "$delete_unmanaged" = false ]; then
+    first_run=true
+    import_gnome_shortcuts "$work" "$gnome_json"
+  fi
+
+  validate_all "$work" "$gnome_json" "$delete_unmanaged" || die "No changes were applied."
+
+  if [ "$first_run" = false ] && [ "$delete_unmanaged" = false ]; then
+    warn_unmanaged "$work" "$gnome_json"
+  fi
+
+  cp "$work" "$CONFIG_FILE"
+  apply_config_to_gnome "$work" "$gnome_json" "$delete_unmanaged"
+  if [ "$first_run" = true ]; then
+    echo "Imported $(gnome_shortcut_count "$gnome_json") GNOME custom shortcut(s) into config."
+  fi
+  if [ "$delete_unmanaged" = true ]; then
+    echo "Backup stored at: $BACKUP_FILE"
+  fi
+  echo "Sync complete."
+  rm -f "$work" "$gnome_json"
+}
+
+main() {
+  ensure_deps
+  case "${1:-help}" in
+    sync)
+      case "${2:-}" in
+        "") cmd_sync false ;;
+        -d|--delete) cmd_sync true ;;
+        *) usage; exit 1 ;;
+      esac
+      ;;
+    validate) cmd_validate ;;
+    list) cmd_list ;;
+    help|-h|--help) usage ;;
+    *) usage; exit 1 ;;
+  esac
+}
+
+main "$@"

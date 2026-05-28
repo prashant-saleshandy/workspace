@@ -7,3 +7,18 @@ _gitsetup_completions() {
     COMPREPLY=($(compgen -W "--y" -- "$cur"))
 }
 complete -F _gitsetup_completions gitsetup
+
+# kbm — keyboard binding manager
+_kbm_completions() {
+    local cur prev
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    if [[ "$prev" == "sync" ]]; then
+        COMPREPLY=($(compgen -W "-d --delete" -- "$cur"))
+        return
+    fi
+
+    COMPREPLY=($(compgen -W "sync validate list help" -- "$cur"))
+}
+complete -F _kbm_completions kbm

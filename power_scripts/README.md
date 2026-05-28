@@ -11,6 +11,7 @@ cd power_scripts
 mkdir -p ~/.local/bin
 ln -s "$(pwd)/gettree.sh" ~/.local/bin/gettree
 ln -s "$(pwd)/gitsetup" ~/.local/bin/gitsetup
+ln -s "$(pwd)/kbm/kbm" ~/.local/bin/kbm
 
 # if ~/.local/bin is not on PATH yet:
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
@@ -52,9 +53,36 @@ gitsetup --y      # auto mode (uses folder name, private visibility)
 
 ---
 
+## kbm
+
+Manages GNOME custom keyboard shortcuts from a repo-tracked JSON config.
+It only manages custom shortcuts; built-in GNOME shortcuts are checked for
+conflicts but never changed.
+
+Config:
+```bash
+kbm/keyboard-bindings.config.json
+```
+
+**Usage:**
+```bash
+kbm sync          # import/apply custom shortcuts without deleting extras
+kbm sync -d       # sync and delete GNOME custom shortcuts missing from config
+kbm validate      # validate config and conflicts without applying changes
+kbm list          # list current GNOME custom shortcuts
+```
+
+On first run, if `custom-shortcuts` is empty, `kbm sync` imports existing GNOME
+custom shortcuts into the config.
+If `custom-shortcuts` is empty, `kbm sync -d` deletes all GNOME custom shortcuts.
+Before any `sync -d` deletion, the latest backup is written to
+`kbm/keyboard-bindings.backup.json`.
+
+---
+
 ## Autocomplete
 
 Tab completion is available for all scripts via `completions.bash`.
 - `gitsetup` — completes the `--y` flag
+- `kbm` — completes commands and `sync -d` / `sync --delete`
 - Source the file in `.bashrc` as shown in setup above.
-

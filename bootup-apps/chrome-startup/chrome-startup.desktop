@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Chrome Startup Tabs
-Exec=/bin/bash /home/prashantsingh/prashant-workspace/core/workspace/bootup-apps/chrome-startup/launch-chrome.sh
+Exec=/bin/bash /home/prashant/prashant-workspace/workspace/bootup-apps/chrome-startup/launch-chrome.sh
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true

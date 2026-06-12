@@ -2,7 +2,7 @@
   "custom-shortcuts": {
     "workspace-launcher": {
       "binding": "Ctrl+Shift+K",
-      "command": "/home/prashantsingh/.local/workspace_launcher/workspace-launcher.sh"
+      "command": "/home/prashant/prashant-workspace/workspace/launcher/workspace-launcher.sh"
     }
   }
 }

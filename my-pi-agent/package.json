@@ -1,0 +1,15 @@
+{
+  "name": "my-pi-agent",
+  "version": "1.0.0",
+  "description": "Personal Pi agent setup with Saleshandy workflow compatibility, explicit MCP control, Firecrawl search, and productivity extensions.",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "check": "node -e \"console.log('No build step required; Pi loads TypeScript extensions via jiti.')\""
+  },
+  "dependencies": {
+    "@earendil-works/pi-tui": "^0.79.3",
+    "@mendable/firecrawl-js": "^4.25.4",
+    "typebox": "^1.2.10"
+  }
+}

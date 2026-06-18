@@ -10,7 +10,9 @@ It includes:
 - `ask_user` interactive question tool
 - Git/productivity commands: `/diff`, `/lg`, `/usage`
 - Git status widget and token-per-second tracker
+- `Ctrl+Alt+O` shortcut to open the current directory in Zed
 - Gruvbox Dark Hard theme
+- Current Pi keybindings in `keybindings.json`
 
 ## Install
 
@@ -183,6 +185,7 @@ extensions/lg.ts
 extensions/usage.ts
 extensions/git-status-widget.ts
 extensions/tps-tracker.ts
+extensions/open-zed.ts
 ```
 
 Commands:
@@ -199,6 +202,20 @@ Always-on UI:
 
 - git branch + unstaged file count widget
 - token-per-second status tracker
+
+Shortcuts:
+
+- `Ctrl+Alt+O` opens the current directory in Zed
+
+## Keybindings
+
+Current Pi keybindings are checked in at:
+
+```text
+keybindings.json
+```
+
+After syncing this repo to `~/.pi/agent`, run `/reload` in Pi to apply changes.
 
 ## Theme
 

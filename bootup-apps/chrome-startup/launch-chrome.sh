@@ -2,13 +2,21 @@
 
 # CONFIG
 # Run: grep -rl "yourmail@mail.com" ~/.config/google-chrome/*/Preferences | cut -d'/' -f6
-CHROME_PROFILE="Default"
+# Company profile for prashant@saleshandy.com is stored in Chrome directory: Profile 1
+CHROME_PROFILE="Profile 1"
 URLS_FILE="$(dirname "$(realpath "$0")")/urls.conf"
+CHROME_USER_DATA_DIR="$HOME/.config/google-chrome"
 
 # seconds to wait for desktop to fully load
 DELAY_SECONDS=5
 
 sleep "$DELAY_SECONDS"
+
+if [ ! -d "$CHROME_USER_DATA_DIR/$CHROME_PROFILE" ]; then
+    echo "Chrome profile directory not found: $CHROME_USER_DATA_DIR/$CHROME_PROFILE"
+    echo "Not launching Chrome, because using a missing profile would create a new one."
+    exit 1
+fi
 
 mapfile -t URLS < <(grep -v '^\s*#' "$URLS_FILE" | grep -v '^\s*$')
 

@@ -8,7 +8,7 @@ It includes:
 - Saleshandy Claude-command compatibility via `/sh`
 - Firecrawl `search` / `scrape` tools
 - `ask_user` interactive question tool
-- Git/productivity commands: `/diff`, `/lg`, `/usage`
+- Git/productivity commands: `/diff`, `/lg`, `/usage`, `/history`
 - Git status widget and token-per-second tracker
 - `Ctrl+Alt+O` shortcut to open the current directory in Zed
 - Gruvbox Dark Hard theme
@@ -183,6 +183,7 @@ Files:
 extensions/diff.ts
 extensions/lg.ts
 extensions/usage.ts
+extensions/history.ts
 extensions/git-status-widget.ts
 extensions/tps-tracker.ts
 extensions/open-zed.ts
@@ -196,7 +197,10 @@ Commands:
 /diff clear
 /lg
 /usage
+/history
 ```
+
+`/history` opens a `/resume`-style picker for all Pi sessions across repos. It switches to the selected session and fuzzy-searches using only user-sent messages from each thread.
 
 Always-on UI:
 

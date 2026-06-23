@@ -2,7 +2,9 @@ node_modules/
 .env
 mcp.env
 auth.json
+trust.json
 sessions/
 bin/
+terminal-profile-backup-*.txt
 *.log
 .DS_Store

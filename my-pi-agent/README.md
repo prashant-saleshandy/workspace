@@ -16,47 +16,44 @@ It includes:
 
 ## Install
 
-This repo is meant to be copied or symlinked into Pi's agent directory.
+This repo is the source of truth. Pi should load it through a symlink at `~/.pi/agent`.
 
 ```bash
 # backup existing setup first if needed
 mv ~/.pi/agent ~/.pi/agent.backup.$(date +%Y%m%d-%H%M%S)
 
-# clone/copy this repo as ~/.pi/agent
-git clone <this-repo-url> ~/.pi/agent
+# clone this repo anywhere you keep code, then symlink it
+ln -s ~/prashant-workspace/workspace/my-pi-agent ~/.pi/agent
 cd ~/.pi/agent
 npm install
 ```
 
-If developing locally from this workspace:
-
-```bash
-cd ~/prashant-workspace/my-pi-agent
-npm install
-```
-
-Then copy/sync into `~/.pi/agent` when ready.
+With the symlink, edit files in this repo and run `/reload` in Pi. No copy/sync step is needed.
 
 ## Secrets
 
-Never commit real secrets.
-
-Create local env files only in `~/.pi/agent`:
+Never commit real secrets. Use the checked-in example files as migration references:
 
 ```bash
-cp .env.example ~/.pi/agent/.env
+cp .env.example ~/.pi/agent/.env        # Firecrawl/search tool envs
 chmod 600 ~/.pi/agent/.env
 
-cp mcp.env.example ~/.pi/agent/mcp.env
+cp mcp.env.example ~/.pi/agent/mcp.env  # MCP server envs
 chmod 600 ~/.pi/agent/mcp.env
 ```
 
-Fill in:
+Fill in at least:
 
 ```env
+# ~/.pi/agent/.env
 FIRECRAWL_API_KEY=
+
+# ~/.pi/agent/mcp.env
+GRAFANA_URL=https://heimdall.saleshandy.com
 GRAFANA_SERVICE_ACCOUNT_TOKEN=
 ```
+
+Pi login/provider auth is normally restored by running `/login` on the new machine; local `auth.json`, `trust.json`, `sessions/`, `.env`, and `mcp.env` are gitignored.
 
 ## Extensions
 
@@ -200,7 +197,7 @@ Commands:
 /history
 ```
 
-`/history` opens a `/resume`-style picker for all Pi sessions across repos. It switches to the selected session and fuzzy-searches using only user-sent messages from each thread.
+`/history` opens all Pi sessions across repos as `[thread] - [message count] - [path]`. It switches to the selected session and fuzzy-searches using only user-sent messages from each thread.
 
 Always-on UI:
 
